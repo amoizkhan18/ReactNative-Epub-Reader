@@ -1,0 +1,11 @@
+
+{
+  "name": "react-native-epub-reader",
+  "version": "1.0.0",
+  "main": "index.js",
+  "keywords": ["react-native", "epub", "reader", "highlight"],
+  "peerDependencies": {
+    "react": "*",
+    "react-native": ">=0.72.0"
+  }
+}

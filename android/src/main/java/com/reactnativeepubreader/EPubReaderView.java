@@ -1,0 +1,367 @@
+package com.reactnativeepubreader;
+
+import android.content.Context;
+import android.graphics.Color;
+import android.net.Uri;
+import android.util.AttributeSet;
+import android.util.Log;
+import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.os.AsyncTask;
+
+import androidx.annotation.Nullable;
+
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLDecoder;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import nl.siegmann.epublib.domain.Book;
+import nl.siegmann.epublib.domain.Resource;
+import nl.siegmann.epublib.epub.EpubReader;
+
+public class EPubReaderView extends WebView {
+    private int fontSizePx = 18;
+    private String fontFamily = "serif";
+    private boolean nightMode = false;
+    private List<Resource> chapters;
+    private Map<String, Resource> resourceMap;
+    private int currentChapterIndex = 0;
+    private final Map<Integer, String> highlightedHtmlPerChapter = new HashMap<>();
+
+    public EPubReaderView(Context context) {
+        super(context);
+        init();
+    }
+
+    public EPubReaderView(Context context, @Nullable AttributeSet attrs) {
+        super(context, attrs);
+        init();
+    }
+
+    private void init() {
+        WebSettings settings = getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setAllowFileAccess(true);
+        setBackgroundColor(Color.TRANSPARENT);
+
+        setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
+                Log.d("EPubWebViewJS", consoleMessage.message() + " -- line "
+                        + consoleMessage.lineNumber() + " of " + consoleMessage.sourceId());
+                return true;
+            }
+        });
+
+        setWebViewClient(new WebViewClient() {
+            @Nullable
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return interceptFromUrl(request.getUrl().toString());
+            }
+
+            @Nullable
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+                return interceptFromUrl(url);
+            }
+
+            private WebResourceResponse interceptFromUrl(String url) {
+                try {
+                    if (url == null || url.trim().isEmpty()) return null;
+                    if (url.startsWith("data:") || url.startsWith("about:")) return null;
+
+                    String decodedUrl = URLDecoder.decode(url, "UTF-8");
+                    Uri uri = Uri.parse(decodedUrl);
+                    String path = uri.getPath();
+
+                    if (path != null && path.startsWith("/")) path = path.substring(1);
+
+                    if (path != null && resourceMap.containsKey(path)) {
+                        Resource res = resourceMap.get(path);
+                        String mime = res.getMediaType() != null ? res.getMediaType().getName() : "application/octet-stream";
+                        return new WebResourceResponse(mime, "UTF-8", new ByteArrayInputStream(res.getData()));
+                    }
+                } catch (Exception e) {
+                    Log.e("EPubReaderView", "Error intercepting URL: " + url, e);
+                }
+                return null;
+            }
+        });
+
+        addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void onPageChanged(int current, int total) {
+            }
+        }, "Android");
+    }
+
+    public void loadEpub(final String pathOrUrl) {
+    if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+        new DownloadAndLoadEpubTask().execute(pathOrUrl);
+    } else if (pathOrUrl.startsWith("file://")) {
+        // Load from local file path
+        loadEpubFromInputStream(getFileInputStream(pathOrUrl.replace("file://", "")));
+    } else if (new File(pathOrUrl).exists()) {
+        // Load from absolute file path
+        loadEpubFromInputStream(getFileInputStream(pathOrUrl));
+    } else {
+        // Load from assets
+        loadEpubFromInputStream(getAssetInputStream(pathOrUrl));
+    }
+}
+
+private InputStream getFileInputStream(String filePath) {
+    try {
+        return new java.io.FileInputStream(filePath);
+    } catch (Exception e) {
+        Log.e("EPubReaderView", "Failed to open file: " + filePath, e);
+        return null;
+    }
+}
+
+private InputStream getAssetInputStream(String assetPath) {
+    try {
+        return getContext().getAssets().open(assetPath);
+    } catch (Exception e) {
+        Log.e("EPubReaderView", "Failed to open asset: " + assetPath, e);
+        return null;
+    }
+}
+
+    private void loadEpubFromInputStream(InputStream inputStream) {
+        if (inputStream == null) return;
+        try {
+            Book book = (new EpubReader()).readEpub(inputStream);
+            chapters = book.getContents();
+            resourceMap = new HashMap<>();
+            for (String href : book.getResources().getAllHrefs()) {
+                String normalized = Uri.parse(href).getPath();
+                if (normalized != null && normalized.startsWith("/")) {
+                    normalized = normalized.substring(1);
+                }
+                resourceMap.put(normalized != null ? normalized : href, book.getResources().getByHref(href));
+            }
+            //currentChapterIndex = 0;
+            loadCurrentChapter();
+        } catch (Exception e) {
+            Log.e("EPubReaderView", "Failed to load EPUB", e);
+        }
+    }
+
+
+private int lastScrollY = 0;
+
+private void saveScrollPosition(Runnable afterSaved) {
+    post(() -> evaluateJavascript(
+        "(function(){return window.scrollY;})()",
+        value -> {
+            try {
+                lastScrollY = Integer.parseInt(value.replaceAll("\"", ""));
+            } catch (Exception e) {
+                lastScrollY = 0;
+            }
+            if (afterSaved != null) afterSaved.run();
+        }
+    ));
+}
+
+    private class DownloadAndLoadEpubTask extends AsyncTask<String, Void, File> {
+        @Override
+        protected File doInBackground(String... params) {
+            String urlStr = params[0];
+            File outFile = new File(getContext().getCacheDir(), "downloaded.epub");
+            try {
+                URL url = new URL(urlStr);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.connect();
+                InputStream inputStream = connection.getInputStream();
+                FileOutputStream fos = new FileOutputStream(outFile);
+                byte[] buffer = new byte[4096];
+                int len;
+                while ((len = inputStream.read(buffer)) > 0) {
+                    fos.write(buffer, 0, len);
+                }
+                fos.close();
+                inputStream.close();
+                return outFile;
+            } catch (Exception e) {
+                Log.e("EPubReaderView", "Download failed", e);
+                return null;
+            }
+        }
+
+        @Override
+        protected void onPostExecute(File file) {
+            if (file != null && file.exists()) {
+                try {
+                    InputStream inputStream = new java.io.FileInputStream(file);
+                    loadEpubFromInputStream(inputStream);
+                } catch (Exception e) {
+                    Log.e("EPubReaderView", "Failed to open downloaded file", e);
+                }
+            } else {
+                Log.e("EPubReaderView", "Downloaded file is null or does not exist");
+            }
+        }
+    }
+
+    public void highlightSelection() {
+        post(() -> evaluateJavascript("window.highlightSelectedText && window.highlightSelectedText();", null));
+    }
+
+    public void nextChapter() {
+        if (chapters != null && currentChapterIndex < chapters.size() - 1) {
+            post(() -> evaluateJavascript("document.querySelector('.page')?.innerHTML;", value -> {
+                highlightedHtmlPerChapter.put(currentChapterIndex, unquoteJs(value));
+                currentChapterIndex++;
+                loadCurrentChapter();
+            }));
+        }
+    }
+
+    public void previousChapter() {
+        if (chapters != null && currentChapterIndex > 0) {
+            post(() -> evaluateJavascript("document.querySelector('.page')?.innerHTML;", value -> {
+                highlightedHtmlPerChapter.put(currentChapterIndex, unquoteJs(value));
+                currentChapterIndex--;
+                loadCurrentChapter();
+            }));
+        }
+    }
+
+    public void setFontSize(int fontSize) {
+    saveScrollPosition(() -> {
+        this.fontSizePx = fontSize;
+        loadCurrentChapter();
+    });
+}
+
+public void setFontFamily(String fontFamily) {
+    saveScrollPosition(() -> {
+        this.fontFamily = fontFamily;
+        loadCurrentChapter();
+    });
+}
+
+public void setNightMode(boolean nightMode) {
+    saveScrollPosition(() -> {
+        this.nightMode = nightMode;
+        loadCurrentChapter();
+    });
+}
+
+    @Override
+    public void reload() {
+        loadCurrentChapter();
+    }
+
+    private void loadCurrentChapter() {
+        try {
+        if (chapters == null || currentChapterIndex >= chapters.size()) return;
+
+            String html = new String(chapters.get(currentChapterIndex).getData(), "UTF-8").trim();
+            html = html.replaceAll("(?is)<\\!DOCTYPE.*?>", "")
+                    .replaceAll("(?is)<html.*?>", "")
+                    .replaceAll("(?is)</html>", "")
+                    .replaceAll("(?is)<head.*?>.*?</head>", "")
+                    .replaceAll("(?is)<body.*?>", "")
+                    .replaceAll("(?is)</body>", "");
+
+            int totalChapters = chapters.size();
+            int current = currentChapterIndex + 1;
+
+            String bgColor = nightMode ? "#000000" : "#ffffff";
+            String textColor = nightMode ? "#ffffff" : "#000000";
+
+            String css = "<style>" +
+                    "html, body { margin:0; padding:0; background:" + bgColor + "; color:" + textColor + "; font-family:" + fontFamily + "; font-size:" + fontSizePx + "px; }" +
+                    ".page { width:100vw; min-height:100%; overflow:auto; padding:16px; box-sizing:border-box; }" +
+                    "img { max-width:100%; height:auto; display:block; margin: 0 auto; }" +
+                    "#chapterIndicator { position: fixed; bottom: 8px; right: 12px; background: rgba(0,0,0,0.7); color: #fff; padding: 4px 8px; font-size: 12px; border-radius: 4px; z-index: 999; }" +
+                    "mark { background-color: yellow; }" +
+                    "</style>";
+
+            String js = "<script>" +
+                    "window.highlightSelectedText = function() {" +
+                    "  var selection = window.getSelection();" +
+                    "  if (selection.rangeCount > 0 && selection.toString().length > 0) {" +
+                    "    var range = selection.getRangeAt(0);" +
+                    "    var mark = document.createElement('mark');" +
+                    "    mark.appendChild(range.extractContents());" +
+                    "    range.insertNode(mark);" +
+                    "    selection.removeAllRanges();" +
+                    "  }" +
+                    "};" +
+                    "</script>";
+
+            String indicator = "<div id='chapterIndicator'>Chapter " + current + " of " + totalChapters + "</div>";
+
+            String finalHtml = "<!DOCTYPE html><html class='night-mode'><head><base href='http://localhost/' />" + css +
+                    "</head><body><div class='page'>" +
+                    (highlightedHtmlPerChapter.containsKey(currentChapterIndex)
+                            ? highlightedHtmlPerChapter.get(currentChapterIndex)
+                            : html) +
+                    "</div>" + indicator + js + "</body></html>";
+
+            post(() -> {
+            loadDataWithBaseURL("http://localhost/", finalHtml, "text/html", "UTF-8", null);
+
+            // Restore scroll position after a short delay to ensure content is loaded
+            postDelayed(() -> evaluateJavascript(
+                "window.scrollTo(0, " + lastScrollY + ");", null
+            ), 100);
+        });
+
+    } catch (Exception e) {
+        Log.e("EPubReaderView", "loadCurrentChapter failed", e);
+    }
+    }
+
+    private String unquoteJs(String jsResult) {
+        if (jsResult != null && jsResult.length() >= 2) {
+            try {
+                String cleaned = jsResult.substring(1, jsResult.length() - 1)
+                        .replace("\\n", "")
+                        .replace("\\\"", "\"")
+                        .replace("\\\\", "\\");
+
+                StringBuilder out = new StringBuilder();
+                for (int i = 0; i < cleaned.length(); ) {
+                    if (i + 6 <= cleaned.length() && cleaned.charAt(i) == '\\' && cleaned.charAt(i + 1) == 'u') {
+                        String hex = cleaned.substring(i + 2, i + 6);
+                        try {
+                            int codePoint = Integer.parseInt(hex, 16);
+                            out.append((char) codePoint);
+                            i += 6;
+                        } catch (NumberFormatException e) {
+                            out.append(cleaned.charAt(i));
+                            i++;
+                        }
+                    } else {
+                        out.append(cleaned.charAt(i));
+                        i++;
+                    }
+                }
+                return out.toString();
+            } catch (Exception e) {
+                Log.e("EPubReaderView", "Failed to decode JS string", e);
+            }
+        }
+        return "";
+    }
+}

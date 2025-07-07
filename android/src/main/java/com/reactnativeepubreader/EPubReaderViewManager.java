@@ -1,0 +1,50 @@
+
+package com.reactnativeepubreader;
+
+import android.view.View;
+import androidx.annotation.NonNull;
+import com.facebook.react.uimanager.SimpleViewManager;
+import com.facebook.react.uimanager.ThemedReactContext;
+import com.facebook.react.uimanager.annotations.ReactProp;
+import com.facebook.react.bridge.ReadableMap;
+
+public class EPubReaderViewManager extends SimpleViewManager<EPubReaderView> {
+    public static final String REACT_CLASS = "EPubReaderView";
+
+    @NonNull
+    @Override
+    public String getName() {
+        return REACT_CLASS;
+    }
+
+    @NonNull
+    @Override
+    protected EPubReaderView createViewInstance(@NonNull ThemedReactContext reactContext) {
+        EPubReaderView view = new EPubReaderView(reactContext);
+        EPubReaderModule.registerInstance(view);
+        return view;
+    }
+
+    @ReactProp(name = "source")
+	public void setSource(EPubReaderView view, ReadableMap source) {
+		if (source != null && source.hasKey("uri")) {
+			String uri = source.getString("uri");
+			view.loadEpub(uri); // your custom method to load EPUB
+		}
+	}
+
+    @ReactProp(name = "fontSize")
+    public void setFontSize(EPubReaderView view, int fontSize) {
+        view.setFontSize(fontSize);
+    }
+
+    @ReactProp(name = "fontFamily")
+    public void setFontFamily(EPubReaderView view, String fontFamily) {
+        view.setFontFamily(fontFamily);
+    }
+
+    @ReactProp(name = "nightMode")
+	public void setNightMode(EPubReaderView view, boolean nightMode) {
+		view.setNightMode(nightMode);
+	}
+}
