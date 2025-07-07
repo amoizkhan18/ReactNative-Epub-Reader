@@ -21,7 +21,7 @@ A customizable and feature-rich EPUB reader plugin built for React Native applic
 npm install react-native-epub-reader
 
 
-🛠️ Usage
+## 🛠️ Usage
 
 import EpubReader from 'react-native-epub-reader';
 
@@ -38,7 +38,7 @@ export default function ReaderScreen() {
 }
 
 
-📌 Props
+## 📌 Props
 
 | Prop           | Type       | Default     | Description                                       |
 | -------------- | ---------- | ----------- | ------------------------------------------------- |
@@ -50,7 +50,7 @@ export default function ReaderScreen() {
 | `onPageChange` | `function` | `undefined` | Called when the user navigates to a new page      |
 
 
-🎨 Customization
+## 🎨 Customization
 
 You can modify the EPUB reader UI by wrapping or extending this component. For example:
 
@@ -66,7 +66,7 @@ Add accessibility or gesture support
 
 
 
-🔧 Development
+## 🔧 Development
 
 Clone the repo: git clone git@github.com:your-username/ReactNative-Epub-Reader.git
 
@@ -77,12 +77,12 @@ Run in your React Native app: npm start
 
 
 
-🤝 Contributing
+## 🤝 Contributing
 
 Contributions, bug reports, and feature suggestions are welcome! Please open an issue or a pull request to help improve this plugin.
 
 
-📄 License
+## 📄 License
 MIT License © 2025 amoizkhan18
 
 
